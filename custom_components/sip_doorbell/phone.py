@@ -1,4 +1,4 @@
-"""Pure asyncio SIP implementation."""
+﻿"""Pure asyncio SIP implementation."""
 from __future__ import annotations
 
 import logging
@@ -688,3 +688,6 @@ class SIPProtocol(asyncio.DatagramProtocol):
     def handle_response(self, msg: dict):
         """Handle response for matching."""
         pass
+
+
+
