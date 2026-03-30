@@ -8,14 +8,18 @@ import random
 import re
 from dataclasses import dataclass
 from typing import Optional, Callable, Any
+from datetime import datetime
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
+    DOMAIN,
     SIGNAL_STATE_CHANGED,
     SIGNAL_INCOMING_CALL,
     SIGNAL_CALL_ENDED,
+    EVENT_INCOMING_CALL,
+    EVENT_CALL_ENDED,
     STATE_UNREGISTERED,
     STATE_REGISTERING,
     STATE_REGISTERED,
@@ -35,6 +39,7 @@ class SIPConfig:
     user: str
     password: str
     realm: str
+    auto_answer: bool = False
     local_ip: str = "0.0.0.0"
     local_port: int = 0
 
@@ -50,6 +55,7 @@ class SIPPhone:
             user=config["sip_user"],
             password=config["sip_password"],
             realm=config.get("sip_realm", "asterisk"),
+            auto_answer=config.get("auto_answer", False),
         )
         
         self._state = STATE_UNREGISTERED
@@ -83,6 +89,15 @@ class SIPPhone:
         loop = self.hass.loop
         if loop is not None:
             asyncio.run_coroutine_threadsafe(_send(), loop)
+            
+    def _fire_event(self, event_type: str, data: dict) -> None:
+        """Thread-safe fire HA event."""
+        def _fire():
+            self.hass.bus.fire(event_type, data)
+        
+        loop = self.hass.loop
+        if loop is not None:
+            asyncio.run_coroutine_threadsafe(_fire(), loop)
             
     def _set_state(self, new_state: str) -> None:
         """Update state and notify (thread-safe)."""
@@ -243,6 +258,29 @@ class SIPPhone:
             
         return result
         
+    def _parse_caller_id(self, from_header: str) -> dict:
+        """Parse caller ID from SIP header."""
+        # Формат: "Display Name" <sip:number@host>;tag=xxx
+        # или: <sip:number@host>;tag=xxx
+        # или: sip:number@host
+        
+        result = {"name": "Unknown", "number": "Unknown"}
+        
+        if not from_header:
+            return result
+            
+        # Имя в кавычках
+        name_match = re.search(r'"([^"]+)"', from_header)
+        if name_match:
+            result["name"] = name_match.group(1)
+            
+        # Номер из sip:xxx@yyy
+        number_match = re.search(r'sip:([^@>]+)', from_header)
+        if number_match:
+            result["number"] = number_match.group(1)
+            
+        return result
+        
     async def start(self) -> None:
         """Start SIP phone."""
         try:
@@ -375,16 +413,22 @@ class SIPPhone:
         """Handle incoming INVITE."""
         _LOGGER.info(f"Incoming call from {msg['headers'].get('from', 'Unknown')}")
         
+        # Parse caller ID
+        caller = msg['headers'].get('from', 'Unknown')
+        parsed_caller = self._parse_caller_id(caller)
+        
         # Save dialog info
         self._dialog = {
             "uri": msg["uri"],
-            "from": msg["headers"].get("from"),
+            "from": caller,
             "to": msg["headers"].get("to"),
             "call_id": msg["headers"].get("call-id"),
             "via": msg["headers"].get("via"),
             "cseq": msg["headers"].get("cseq", "0").split()[0],
             "branch": self._extract_branch(msg["headers"].get("via", "")),
             "remote_addr": addr,
+            "caller_name": parsed_caller["name"],
+            "caller_number": parsed_caller["number"],
         }
         
         # Send 180 Ringing
@@ -394,11 +438,28 @@ class SIPPhone:
         self._set_state(STATE_RINGING)
         self._pending_invite = msg
         
-        # Notify HA (thread-safe)
-        self._dispatch_signal(SIGNAL_INCOMING_CALL, {
-            "from": msg["headers"].get("from"),
-            "to": msg["headers"].get("to"),
+        # Fire HA event for frontend (auto-open card)
+        self._fire_event(EVENT_INCOMING_CALL, {
+            "caller": caller,
+            "caller_name": parsed_caller["name"],
+            "caller_number": parsed_caller["number"],
+            "extension": self.config.user,
+            "timestamp": datetime.now().isoformat(),
+            "auto_open": True,
         })
+        
+        # Dispatch for internal components
+        self._dispatch_signal(SIGNAL_INCOMING_CALL, {
+            "from": caller,
+            "to": msg["headers"].get("to"),
+            "caller_name": parsed_caller["name"],
+            "caller_number": parsed_caller["number"],
+        })
+        
+        # Auto-answer if enabled
+        if self.config.auto_answer:
+            await asyncio.sleep(1)
+            await self.answer()
         
     def _build_ringing(self, request: dict) -> bytes:
         """Build 180 Ringing response."""
@@ -417,6 +478,12 @@ class SIPPhone:
         """Handle BYE."""
         _LOGGER.info("Remote hung up")
         self._set_state(STATE_HANGUP)
+        
+        # Fire call ended event
+        self._fire_event(EVENT_CALL_ENDED, {
+            "extension": self.config.user,
+            "timestamp": datetime.now().isoformat(),
+        })
         
         self._dispatch_signal(SIGNAL_CALL_ENDED, {})
         

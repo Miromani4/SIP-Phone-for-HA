@@ -31,6 +31,10 @@ SIGNAL_STATE_CHANGED = f"{DOMAIN}_state_changed"
 SIGNAL_INCOMING_CALL = f"{DOMAIN}_incoming_call"
 SIGNAL_CALL_ENDED = f"{DOMAIN}_call_ended"
 
+# Events for frontend
+EVENT_INCOMING_CALL = f"{DOMAIN}_incoming_call"
+EVENT_CALL_ENDED = f"{DOMAIN}_call_ended"
+
 # Services
 SERVICE_ANSWER = "answer"
 SERVICE_HANGUP = "hangup"

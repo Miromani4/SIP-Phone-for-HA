@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.components import websocket_api
 
 from .const import (
     DOMAIN,
@@ -24,6 +25,7 @@ from .const import (
     SERVICE_HANGUP,
     SERVICE_SEND_DTMF,
     SERVICE_CALL,
+    EVENT_INCOMING_CALL,
 )
 
 from .phone import SIPPhone
@@ -65,8 +67,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Start registration
     hass.async_create_background_task(phone.start(), "sip_start")
     
-    # Setup services
+    # Setup services and websocket
     _setup_services(hass, phone)
+    _setup_websocket(hass)
     
     # Forward to platforms
     hass.async_create_task(
@@ -88,6 +91,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     hass.async_create_background_task(phone.start(), "sip_start")
     _setup_services(hass, phone)
+    _setup_websocket(hass)
     
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
@@ -121,6 +125,73 @@ def _setup_services(hass: HomeAssistant, phone: SIPPhone) -> None:
     hass.services.async_register(DOMAIN, SERVICE_HANGUP, async_hangup)
     hass.services.async_register(DOMAIN, SERVICE_SEND_DTMF, async_send_dtmf)
     hass.services.async_register(DOMAIN, SERVICE_CALL, async_call)
+
+
+def _setup_websocket(hass: HomeAssistant) -> None:
+    """Setup WebSocket API for call events."""
+    
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"{DOMAIN}/subscribe_calls",
+    })
+    @websocket_api.async_response
+    async def websocket_subscribe_calls(hass, connection, msg):
+        """Subscribe to incoming call events."""
+        
+        def forward_event(event):
+            """Forward HA event to WebSocket client."""
+            connection.send_message({
+                "id": msg["id"],
+                "type": "event",
+                "event": {
+                    "event_type": event.event_type,
+                    "data": event.data,
+                    "time_fired": event.time_fired.isoformat(),
+                },
+            })
+        
+        # Subscribe to incoming call events
+        cancel_listener = hass.bus.async_listen(
+            EVENT_INCOMING_CALL, forward_event
+        )
+        
+        # Store cleanup function
+        connection.subscriptions[msg["id"]] = cancel_listener
+        connection.send_message({"id": msg["id"], "type": "result", "success": True})
+    
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"{DOMAIN}/get_status",
+        vol.Optional("extension"): str,
+    })
+    @websocket_api.async_response
+    async def websocket_get_status(hass, connection, msg):
+        """Get current SIP phone status."""
+        extension = msg.get("extension")
+        
+        # Find phone by extension
+        phone = None
+        for key, obj in hass.data.get(DOMAIN, {}).items():
+            if key == "yaml_phone":
+                if not extension or obj.config.user == extension:
+                    phone = obj
+                    break
+            elif hasattr(obj, 'config') and obj.config.user == extension:
+                phone = obj
+                break
+        
+        if phone:
+            connection.send_result(msg["id"], {
+                "state": phone.state,
+                "extension": phone.config.user,
+                "server": phone.config.server,
+                "local_ip": phone.config.local_ip,
+                "local_port": phone.config.local_port,
+            })
+        else:
+            connection.send_error(msg["id"], "not_found", "Phone not found")
+    
+    # Register WebSocket commands
+    websocket_api.async_register_command(hass, websocket_subscribe_calls)
+    websocket_api.async_register_command(hass, websocket_get_status)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
