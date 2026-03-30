@@ -72,7 +72,7 @@ class SIPCallSwitch(SwitchEntity):
         """Return device info."""
         return {
             "identifiers": {(DOMAIN, self._phone.user)},
-            "name": f"SIP {phone.user}",
+            "name": f"SIP {self._phone.user}",
             "manufacturer": "SIP Doorbell",
             "model": "SIP Client",
         }
