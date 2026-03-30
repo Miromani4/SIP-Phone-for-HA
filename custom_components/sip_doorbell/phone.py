@@ -85,7 +85,6 @@ class SIPPhone:
         async def _send():
             async_dispatcher_send(self.hass, signal, *args)
         
-        # Schedule coroutine in event loop thread-safe
         loop = self.hass.loop
         if loop is not None:
             asyncio.run_coroutine_threadsafe(_send(), loop)
@@ -93,6 +92,7 @@ class SIPPhone:
     def _fire_event(self, event_type: str, data: dict) -> None:
         """Thread-safe fire HA event."""
         def _fire():
+            _LOGGER.debug(f"Firing event: {event_type} with data: {data}")
             self.hass.bus.fire(event_type, data)
         
         loop = self.hass.loop
@@ -102,7 +102,7 @@ class SIPPhone:
     def _set_state(self, new_state: str) -> None:
         """Update state and notify (thread-safe)."""
         if self._state != new_state:
-            _LOGGER.debug(f"State: {self._state} -> {new_state}")
+            _LOGGER.debug(f"State changed: {self._state} -> {new_state}")
             self._state = new_state
             self._dispatch_signal(SIGNAL_STATE_CHANGED, new_state)
             
@@ -229,22 +229,18 @@ class SIPPhone:
             
         result: dict[str, Any] = {"headers": {}, "body": ""}
         
-        # First line
         first = lines[0]
         if first.startswith("SIP/2.0"):
-            # Response
             match = re.match(r"SIP/2.0 (\d+) (.*)", first)
             if match:
                 result["status_code"] = int(match.group(1))
                 result["reason"] = match.group(2)
         else:
-            # Request
             parts = first.split()
             if len(parts) >= 3:
                 result["method"] = parts[0]
                 result["uri"] = parts[1]
                 
-        # Headers
         i = 1
         while i < len(lines) and lines[i]:
             if ':' in lines[i]:
@@ -252,7 +248,6 @@ class SIPPhone:
                 result["headers"][key.strip().lower()] = value.strip()
             i += 1
             
-        # Body
         if i < len(lines):
             result["body"] = '\r\n'.join(lines[i+1:])
             
@@ -260,21 +255,15 @@ class SIPPhone:
         
     def _parse_caller_id(self, from_header: str) -> dict:
         """Parse caller ID from SIP header."""
-        # Формат: "Display Name" <sip:number@host>;tag=xxx
-        # или: <sip:number@host>;tag=xxx
-        # или: sip:number@host
-        
         result = {"name": "Unknown", "number": "Unknown"}
         
         if not from_header:
             return result
             
-        # Имя в кавычках
         name_match = re.search(r'"([^"]+)"', from_header)
         if name_match:
             result["name"] = name_match.group(1)
             
-        # Номер из sip:xxx@yyy
         number_match = re.search(r'sip:([^@>]+)', from_header)
         if number_match:
             result["number"] = number_match.group(1)
@@ -286,25 +275,21 @@ class SIPPhone:
         try:
             self._set_state(STATE_REGISTERING)
             
-            # Create UDP socket
             loop = asyncio.get_event_loop()
             self._transport, self._protocol = await loop.create_datagram_endpoint(
                 lambda: SIPProtocol(self._on_message),
                 local_addr=(self.config.local_ip, self.config.local_port),
             )
             
-            # Get actual local port
             sock = self._transport.get_extra_info('socket')
             self.config.local_port = sock.getsockname()[1]
             self.config.local_ip = sock.getsockname()[0]
             
             _LOGGER.info(f"SIP socket bound to {self.config.local_ip}:{self.config.local_port}")
             
-            # Generate tags
             self._from_tag = self._generate_tag()
             self._call_id = self._generate_call_id()
             
-            # Start registration loop
             self._register_task = asyncio.create_task(self._register_loop())
             
         except Exception as e:
@@ -318,10 +303,8 @@ class SIPPhone:
         while True:
             try:
                 if await self._do_register():
-                    # Success, re-register after 300s
                     await asyncio.sleep(300)
                 else:
-                    # Failed, retry
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, 300)
             except asyncio.CancelledError:
@@ -334,11 +317,9 @@ class SIPPhone:
         """Perform single registration."""
         self._cseq += 1
         
-        # First attempt without auth
         msg = self._build_register(self._call_id, self._cseq)
         self._transport.sendto(msg, (self.config.server, self.config.port))
         
-        # Wait response
         try:
             response = await asyncio.wait_for(
                 self._protocol.wait_for_response(self._call_id, self._cseq),
@@ -354,7 +335,6 @@ class SIPPhone:
             return True
             
         elif response.get("status_code") == 401:
-            # Need auth
             www_auth = response["headers"].get("www-authenticate", "")
             match = re.search(r'nonce="([^"]+)"', www_auth)
             if not match:
@@ -365,7 +345,6 @@ class SIPPhone:
             realm_match = re.search(r'realm="([^"]+)"', www_auth)
             realm = realm_match.group(1) if realm_match else self.config.realm
             
-            # Second attempt with auth
             self._cseq += 1
             auth = {"nonce": nonce, "realm": realm}
             msg = self._build_register(self._call_id, self._cseq, auth)
@@ -396,28 +375,24 @@ class SIPPhone:
         msg = self._parse_message(data)
         
         if "method" in msg:
-            # Request - schedule in event loop
             if msg["method"] == "INVITE":
                 self.hass.add_job(self._handle_invite, msg, addr)
             elif msg["method"] == "BYE":
                 self.hass.add_job(self._handle_bye, msg)
             elif msg["method"] == "ACK":
-                pass  # Ignore
+                pass
             elif msg["method"] == "CANCEL":
                 self.hass.add_job(self._handle_cancel, msg)
         else:
-            # Response - handled by protocol
             self._protocol.handle_response(msg)
             
     async def _handle_invite(self, msg: dict, addr: tuple) -> None:
         """Handle incoming INVITE."""
         _LOGGER.info(f"Incoming call from {msg['headers'].get('from', 'Unknown')}")
         
-        # Parse caller ID
         caller = msg['headers'].get('from', 'Unknown')
         parsed_caller = self._parse_caller_id(caller)
         
-        # Save dialog info
         self._dialog = {
             "uri": msg["uri"],
             "from": caller,
@@ -431,22 +406,23 @@ class SIPPhone:
             "caller_number": parsed_caller["number"],
         }
         
-        # Send 180 Ringing
         ringing = self._build_ringing(msg)
         self._transport.sendto(ringing, addr)
         
         self._set_state(STATE_RINGING)
         self._pending_invite = msg
         
-        # Fire HA event for frontend (auto-open card)
-        self._fire_event(EVENT_INCOMING_CALL, {
+        # Fire event for frontend popup
+        event_data = {
             "caller": caller,
             "caller_name": parsed_caller["name"],
             "caller_number": parsed_caller["number"],
             "extension": self.config.user,
             "timestamp": datetime.now().isoformat(),
             "auto_open": True,
-        })
+        }
+        _LOGGER.debug(f"Firing incoming call event: {event_data}")
+        self._fire_event(EVENT_INCOMING_CALL, event_data)
         
         # Dispatch for internal components
         self._dispatch_signal(SIGNAL_INCOMING_CALL, {
@@ -456,7 +432,6 @@ class SIPPhone:
             "caller_number": parsed_caller["number"],
         })
         
-        # Auto-answer if enabled
         if self.config.auto_answer:
             await asyncio.sleep(1)
             await self.answer()
@@ -477,9 +452,8 @@ class SIPPhone:
     async def _handle_bye(self, msg: dict) -> None:
         """Handle BYE."""
         _LOGGER.info("Remote hung up")
-        self._set_state(STATE_HANGUP)
         
-        # Fire call ended event
+        # Fire call ended event FIRST
         self._fire_event(EVENT_CALL_ENDED, {
             "extension": self.config.user,
             "timestamp": datetime.now().isoformat(),
@@ -491,17 +465,35 @@ class SIPPhone:
         ok = self._build_ok(msg)
         self._transport.sendto(ok, self._dialog["remote_addr"] if self._dialog else None)
         
-        await asyncio.sleep(1)
+        # Clear dialog
+        self._pending_invite = None
+        self._dialog = None
+        
+        # Update state
+        self._set_state(STATE_HANGUP)
+        await asyncio.sleep(0.5)
         self._set_state(STATE_REGISTERED)
         
     async def _handle_cancel(self, msg: dict) -> None:
         """Handle CANCEL."""
         _LOGGER.info("Call cancelled")
-        self._set_state(STATE_REGISTERED)
         
-        # Send 200 OK for CANCEL and 487 for INVITE
+        # Fire call ended event
+        self._fire_event(EVENT_CALL_ENDED, {
+            "extension": self.config.user,
+            "timestamp": datetime.now().isoformat(),
+            "reason": "cancelled",
+        })
+        
+        self._dispatch_signal(SIGNAL_CALL_ENDED, {})
+        
         ok = self._build_ok(msg)
         self._transport.sendto(ok)
+        
+        # Clear state
+        self._pending_invite = None
+        self._dialog = None
+        self._set_state(STATE_REGISTERED)
         
     def _extract_branch(self, via: str) -> str:
         """Extract branch from Via header."""
@@ -516,15 +508,11 @@ class SIPPhone:
             
         _LOGGER.info("Answering call")
         
-        # Build 200 OK with SDP (simplified)
         sdp = self._build_sdp()
         ok = self._build_ok_with_sdp(self._pending_invite, sdp)
         
         self._transport.sendto(ok, self._dialog["remote_addr"])
         self._set_state(STATE_IN_CALL)
-        
-        # Wait for ACK
-        # In real implementation, need proper dialog management
         
     def _build_sdp(self) -> str:
         """Build minimal SDP."""
@@ -534,7 +522,7 @@ class SIPPhone:
             "s=SIP Doorbell\r\n"
             f"c=IN IP4 {self.config.local_ip}\r\n"
             "t=0 0\r\n"
-            "m=audio 0 RTP/AVP 0\r\n"  # 0 = PCMU
+            "m=audio 0 RTP/AVP 0\r\n"
             "a=rtpmap:0 PCMU/8000\r\n"
         )
         
@@ -559,14 +547,38 @@ class SIPPhone:
         
     async def hangup(self) -> None:
         """Hangup call."""
-        if self._state == STATE_IN_CALL and self._dialog:
-            _LOGGER.info("Hanging up")
+        _LOGGER.info(f"Hanging up, current state: {self._state}")
+        
+        # Hangup if in call OR if there's an incoming call (ringing)
+        if self._state in [STATE_IN_CALL, STATE_RINGING] and self._dialog:
             bye = self._build_bye(self._dialog)
             self._transport.sendto(bye, self._dialog["remote_addr"])
-            
+        elif self._state == STATE_RINGING and self._pending_invite:
+            # Send 487 Request Terminated for ringing call
+            _LOGGER.info("Rejecting ringing call")
+            reject = self._build_reject(self._pending_invite)
+            self._transport.sendto(reject, self._dialog["remote_addr"] if self._dialog else None)
+        
+        # Clear state
+        self._pending_invite = None
+        self._dialog = None
+        
         self._set_state(STATE_HANGUP)
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         self._set_state(STATE_REGISTERED)
+        
+    def _build_reject(self, request: dict) -> bytes:
+        """Build 487 Request Terminated response."""
+        headers = [
+            "SIP/2.0 487 Request Terminated",
+            f"Via: {request['headers'].get('via')}",
+            f"From: {request['headers'].get('from')}",
+            f"To: {request['headers'].get('to')};tag={self._generate_tag()}",
+            f"Call-ID: {request['headers'].get('call-id')}",
+            f"CSeq: {request['headers'].get('cseq')} INVITE",
+            "Content-Length: 0",
+        ]
+        return "\r\n".join(headers).encode() + b"\r\n\r\n"
         
     async def send_dtmf(self, digits: str, duration: int = 250) -> None:
         """Send DTMF via INFO."""
@@ -583,7 +595,6 @@ class SIPPhone:
     async def call(self, number: str) -> None:
         """Make outgoing call."""
         _LOGGER.info(f"Calling {number}")
-        # TODO: Implement outgoing INVITE
         pass
         
     async def stop(self) -> None:
@@ -598,7 +609,6 @@ class SIPPhone:
                 pass
                 
         if self._transport:
-            # Unregister
             if self._state == STATE_REGISTERED:
                 self._cseq += 1
                 msg = self._build_register(self._call_id, self._cseq, expires=0)
@@ -621,11 +631,9 @@ class SIPProtocol(asyncio.DatagramProtocol):
         
     def datagram_received(self, data, addr):
         """Handle incoming datagram."""
-        # Check if it's a response we're waiting for
         msg = self._parse_simple(data)
         
         if "status_code" in msg:
-            # Response
             call_id = msg.get("headers", {}).get("call-id")
             cseq = msg.get("headers", {}).get("cseq", "").split()[0]
             key = (call_id, int(cseq) if cseq else 0)
@@ -635,7 +643,6 @@ class SIPProtocol(asyncio.DatagramProtocol):
                 del self._responses[key]
                 return
                 
-        # Pass to handler
         self.on_message(data, addr)
         
     def _parse_simple(self, data: bytes) -> dict:

@@ -1,10 +1,10 @@
 {
   "domain": "sip_doorbell",
   "name": "SIP Doorbell",
-  "codeowners": ["@your-username"],
+  "codeowners": ["@Miromani4"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/your-username/sip-doorbell-ha",
+  "documentation": "https://github.com/Miromani4/SIP-Phone-for-HA",
   "iot_class": "local_push",
   "requirements": [],
   "version": "1.0.0"

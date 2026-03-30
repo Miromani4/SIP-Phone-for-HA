@@ -1,4 +1,8 @@
 """SIP call control switch."""
+from __future__ import annotations
+
+import logging
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.core import callback
@@ -13,6 +17,8 @@ from .const import (
     STATE_IN_CALL,
     STATE_HANGUP,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -66,7 +72,7 @@ class SIPCallSwitch(SwitchEntity):
         """Return device info."""
         return {
             "identifiers": {(DOMAIN, self._phone.user)},
-            "name": f"SIP {self._phone.user}",
+            "name": f"SIP {phone.user}",
             "manufacturer": "SIP Doorbell",
             "model": "SIP Client",
         }
@@ -106,6 +112,9 @@ class SIPCallSwitch(SwitchEntity):
     @callback
     def _state_changed(self, new_state):
         """Handle state change."""
+        _LOGGER.debug(f"Switch state changed: {new_state}")
+        if new_state == STATE_HANGUP:
+            self._incoming_from = None
         self.async_write_ha_state()
         
     @callback
