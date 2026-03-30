@@ -75,11 +75,16 @@ class SIPPhone:
         return self.config.user
         
     def _set_state(self, new_state: str) -> None:
-        """Update state and notify."""
+        """Update state and notify (thread-safe)."""
         if self._state != new_state:
             _LOGGER.debug(f"State: {self._state} -> {new_state}")
             self._state = new_state
-            async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED, new_state)
+            
+            # Thread-safe dispatch
+            def _dispatch():
+                async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED, new_state)
+            
+            self.hass.add_job(_dispatch)
             
     def _generate_call_id(self) -> str:
         """Generate unique Call-ID."""
@@ -344,19 +349,19 @@ class SIPPhone:
             return False
             
     def _on_message(self, data: bytes, addr: tuple) -> None:
-        """Handle incoming SIP message."""
+        """Handle incoming SIP message (called from thread)."""
         msg = self._parse_message(data)
         
         if "method" in msg:
-            # Request
+            # Request - schedule in event loop
             if msg["method"] == "INVITE":
-                asyncio.create_task(self._handle_invite(msg, addr))
+                self.hass.add_job(self._handle_invite, msg, addr)
             elif msg["method"] == "BYE":
-                asyncio.create_task(self._handle_bye(msg))
+                self.hass.add_job(self._handle_bye, msg)
             elif msg["method"] == "ACK":
                 pass  # Ignore
             elif msg["method"] == "CANCEL":
-                asyncio.create_task(self._handle_cancel(msg))
+                self.hass.add_job(self._handle_cancel, msg)
         else:
             # Response - handled by protocol
             self._protocol.handle_response(msg)
@@ -384,11 +389,13 @@ class SIPPhone:
         self._set_state(STATE_RINGING)
         self._pending_invite = msg
         
-        # Notify HA
-        async_dispatcher_send(self.hass, SIGNAL_INCOMING_CALL, {
-            "from": msg["headers"].get("from"),
-            "to": msg["headers"].get("to"),
-        })
+        # Notify HA (thread-safe)
+        def _notify():
+            async_dispatcher_send(self.hass, SIGNAL_INCOMING_CALL, {
+                "from": msg["headers"].get("from"),
+                "to": msg["headers"].get("to"),
+            })
+        self.hass.add_job(_notify)
         
     def _build_ringing(self, request: dict) -> bytes:
         """Build 180 Ringing response."""
@@ -407,7 +414,10 @@ class SIPPhone:
         """Handle BYE."""
         _LOGGER.info("Remote hung up")
         self._set_state(STATE_HANGUP)
-        async_dispatcher_send(self.hass, SIGNAL_CALL_ENDED, {})
+        
+        def _notify():
+            async_dispatcher_send(self.hass, SIGNAL_CALL_ENDED, {})
+        self.hass.add_job(_notify)
         
         # Send 200 OK
         ok = self._build_ok(msg)

@@ -1,12 +1,14 @@
 """SIP call control switch."""
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.core import callback
 
 from .const import (
     DOMAIN,
     SIGNAL_STATE_CHANGED,
     SIGNAL_INCOMING_CALL,
     SIGNAL_CALL_ENDED,
+    STATE_REGISTERED,
     STATE_RINGING,
     STATE_IN_CALL,
     STATE_HANGUP,
@@ -101,15 +103,18 @@ class SIPCallSwitch(SwitchEntity):
             )
         )
         
+    @callback
     def _state_changed(self, new_state):
         """Handle state change."""
         self.async_write_ha_state()
         
+    @callback
     def _incoming_call(self, info):
         """Handle incoming call."""
         self._incoming_from = info.get("from")
         self.async_write_ha_state()
         
+    @callback
     def _call_ended(self, info):
         """Handle call end."""
         self._incoming_from = None
