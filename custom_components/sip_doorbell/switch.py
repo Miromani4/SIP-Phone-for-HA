@@ -112,7 +112,7 @@ class SIPCallSwitch(SwitchEntity):
     @callback
     def _state_changed(self, new_state):
         """Handle state change."""
-        _LOGGER.debug(f"Switch state changed: {new_state}")
+        _LOGGER.debug("Switch state changed: %s", new_state)
         if new_state == STATE_HANGUP:
             self._incoming_from = None
         self.async_write_ha_state()

@@ -82,22 +82,13 @@ class SIPPhone:
         
     def _dispatch_signal(self, signal: str, *args) -> None:
         """Thread-safe dispatch to event loop."""
-        async def _send():
-            async_dispatcher_send(self.hass, signal, *args)
-        
-        loop = self.hass.loop
-        if loop is not None:
-            asyncio.run_coroutine_threadsafe(_send(), loop)
+        # async_dispatcher_send is async but must be called in event loop
+        self.hass.add_job(async_dispatcher_send, self.hass, signal, *args)
             
     def _fire_event(self, event_type: str, data: dict) -> None:
         """Thread-safe fire HA event."""
-        def _fire():
-            _LOGGER.debug(f"Firing event: {event_type} with data: {data}")
-            self.hass.bus.fire(event_type, data)
-        
-        loop = self.hass.loop
-        if loop is not None:
-            asyncio.run_coroutine_threadsafe(_fire(), loop)
+        _LOGGER.debug("Firing event: %s with data: %s", event_type, data)
+        self.hass.add_job(self.hass.bus.fire, event_type, data)
             
     def _set_state(self, new_state: str) -> None:
         """Update state and notify (thread-safe)."""
