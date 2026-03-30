@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SIP Домофон",
+        "description": "Настройка SIP-подключения к домофону/интеркому",
+        "data": {
+          "name": "Название",
+          "sip_server": "SIP сервер",
+          "sip_port": "SIP порт",
+          "sip_user": "SIP пользователь/внутренний номер",
+          "sip_password": "SIP пароль",
+          "sip_realm": "SIP домен/Realm",
+          "auto_answer": "Автоответ на входящие звонки"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Не удалось подключиться к SIP серверу",
+      "invalid_auth": "Ошибка аутентификации",
+      "unknown": "Неизвестная ошибка"
+    }
+  }
+}

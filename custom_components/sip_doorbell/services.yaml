@@ -1,0 +1,49 @@
+answer:
+  name: Answer call
+  description: Answer incoming SIP call
+  fields: {}
+
+hangup:
+  name: Hangup
+  description: Hangup current call
+  fields: {}
+
+send_dtmf:
+  name: Send DTMF
+  description: Send DTMF digits to open door, etc.
+  target:
+    entity:
+      integration: sip_doorbell
+      domain: switch
+  fields:
+    digits:
+      name: Digits
+      description: DTMF digits to send (0-9, *, #)
+      required: true
+      example: "1"
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: Duration in milliseconds
+      required: false
+      default: 250
+      example: 250
+      selector:
+        number:
+          min: 50
+          max: 1000
+          step: 50
+          unit_of_measurement: ms
+
+call:
+  name: Make call
+  description: Make outgoing call
+  fields:
+    number:
+      name: Number
+      description: Number to call
+      required: true
+      example: "101"
+      selector:
+        text:

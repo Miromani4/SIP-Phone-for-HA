@@ -1,0 +1,35 @@
+name: Validate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install homeassistant pytest pytest-asyncio
+    
+    - name: Validate manifest
+      run: |
+        python -c "import json; json.load(open('custom_components/sip_doorbell/manifest.json'))"
+    
+    - name: Check syntax
+      run: |
+        python -m py_compile custom_components/sip_doorbell/*.py
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v

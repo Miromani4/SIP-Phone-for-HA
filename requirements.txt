@@ -1,0 +1,8 @@
+# Home Assistant
+homeassistant
+home-assistant.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

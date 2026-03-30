@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SIP Doorbell",
+        "description": "Configure SIP connection to your doorbell/intercom system",
+        "data": {
+          "name": "Name",
+          "sip_server": "SIP Server",
+          "sip_port": "SIP Port",
+          "sip_user": "SIP Username/Extension",
+          "sip_password": "SIP Password",
+          "sip_realm": "SIP Realm/Domain",
+          "auto_answer": "Auto-answer incoming calls"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to SIP server",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    }
+  }
+}
