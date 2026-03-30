@@ -74,17 +74,22 @@ class SIPPhone:
         """SIP user."""
         return self.config.user
         
+    def _dispatch_signal(self, signal: str, *args) -> None:
+        """Thread-safe dispatch to event loop."""
+        async def _send():
+            async_dispatcher_send(self.hass, signal, *args)
+        
+        # Schedule coroutine in event loop thread-safe
+        loop = self.hass.loop
+        if loop is not None:
+            asyncio.run_coroutine_threadsafe(_send(), loop)
+            
     def _set_state(self, new_state: str) -> None:
         """Update state and notify (thread-safe)."""
         if self._state != new_state:
             _LOGGER.debug(f"State: {self._state} -> {new_state}")
             self._state = new_state
-            
-            # Thread-safe dispatch
-            def _dispatch():
-                async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED, new_state)
-            
-            self.hass.add_job(_dispatch)
+            self._dispatch_signal(SIGNAL_STATE_CHANGED, new_state)
             
     def _generate_call_id(self) -> str:
         """Generate unique Call-ID."""
@@ -390,12 +395,10 @@ class SIPPhone:
         self._pending_invite = msg
         
         # Notify HA (thread-safe)
-        def _notify():
-            async_dispatcher_send(self.hass, SIGNAL_INCOMING_CALL, {
-                "from": msg["headers"].get("from"),
-                "to": msg["headers"].get("to"),
-            })
-        self.hass.add_job(_notify)
+        self._dispatch_signal(SIGNAL_INCOMING_CALL, {
+            "from": msg["headers"].get("from"),
+            "to": msg["headers"].get("to"),
+        })
         
     def _build_ringing(self, request: dict) -> bytes:
         """Build 180 Ringing response."""
@@ -415,9 +418,7 @@ class SIPPhone:
         _LOGGER.info("Remote hung up")
         self._set_state(STATE_HANGUP)
         
-        def _notify():
-            async_dispatcher_send(self.hass, SIGNAL_CALL_ENDED, {})
-        self.hass.add_job(_notify)
+        self._dispatch_signal(SIGNAL_CALL_ENDED, {})
         
         # Send 200 OK
         ok = self._build_ok(msg)
