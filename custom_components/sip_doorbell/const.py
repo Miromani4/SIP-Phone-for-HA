@@ -3,6 +3,7 @@
 DOMAIN = "sip_doorbell"
 
 # Config keys
+CONF_NAME = "name"
 CONF_SIP_SERVER = "sip_server"
 CONF_SIP_PORT = "sip_port"
 CONF_SIP_USER = "sip_user"

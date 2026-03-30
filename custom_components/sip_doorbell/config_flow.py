@@ -7,6 +7,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     DOMAIN,
+    CONF_NAME,
     CONF_SIP_SERVER,
     CONF_SIP_PORT,
     CONF_SIP_USER,
