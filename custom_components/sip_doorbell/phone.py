@@ -4,10 +4,12 @@ from __future__ import annotations
 import logging
 import asyncio
 import hashlib
+import os
 import random
 import re
 import socket
 from dataclasses import dataclass
+from logging.handlers import RotatingFileHandler
 from typing import Optional, Callable, Any
 from datetime import datetime
 
@@ -29,7 +31,42 @@ from .const import (
     STATE_HANGUP,
 )
 
-_LOGGER = logging.getLogger(__name__)
+def _setup_file_logger() -> logging.Logger:
+    """Setup logger with file output."""
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    
+    # Путь к директории с логами
+    log_dir = os.path.expanduser("~/.homeassistant/sip_logs")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Путь к файлу логов
+    log_file = os.path.join(log_dir, "sip_doorbell.log")
+    
+    # Handler с ротацией (10 файлов по 5MB)
+    handler = RotatingFileHandler(
+        log_file,
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=10,
+        encoding='utf-8'
+    )
+    handler.setLevel(logging.DEBUG)
+    
+    # Формат логов с временной меткой
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    
+    # Удаляем старые handlers если есть
+    logger.handlers = []
+    logger.addHandler(handler)
+    
+    return logger
+
+
+_LOGGER = _setup_file_logger()
 
 
 @dataclass
