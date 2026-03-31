@@ -569,7 +569,7 @@ class SIPDoorbellCallPopup extends HTMLElement {
                         class="mute-btn"
                         icon="mdi:microphone"
                     >
-                        Мute
+                        Mute
                     </mwc-button>
                     <mwc-button 
                         raised 
