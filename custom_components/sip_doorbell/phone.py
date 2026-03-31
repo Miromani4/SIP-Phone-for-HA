@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import random
 import re
+import socket
 from dataclasses import dataclass
 from typing import Optional, Callable, Any
 from datetime import datetime
@@ -69,6 +70,10 @@ class SIPPhone:
         self._to_tag = None
         self._dialog = None
         self._pending_invite = None
+        self._last_register_attempt: Optional[datetime] = None
+        self._register_attempt_count = 0
+        self._connection_lost_count = 0
+        self._last_connection_lost: Optional[datetime] = None
         
     @property
     def state(self) -> str:
@@ -264,11 +269,16 @@ class SIPPhone:
     async def start(self) -> None:
         """Start SIP phone."""
         try:
+            _LOGGER.info(
+                f"Starting SIP phone: user={self.config.user}, "
+                f"server={self.config.server}:{self.config.port}, "
+                f"realm={self.config.realm}"
+            )
             self._set_state(STATE_REGISTERING)
             
             loop = asyncio.get_event_loop()
             self._transport, self._protocol = await loop.create_datagram_endpoint(
-                lambda: SIPProtocol(self._on_message),
+                lambda: SIPProtocol(self._on_message, self._on_connection_lost),
                 local_addr=(self.config.local_ip, self.config.local_port),
             )
             
@@ -281,43 +291,104 @@ class SIPPhone:
             self._from_tag = self._generate_tag()
             self._call_id = self._generate_call_id()
             
+            # Сброс счетчиков при успешном старте
+            self._connection_lost_count = 0
+            self._register_attempt_count = 0
+            
             self._register_task = asyncio.create_task(self._register_loop())
             
         except Exception as e:
-            _LOGGER.error(f"Failed to start: {e}")
+            _LOGGER.error(f"Failed to start SIP phone: {type(e).__name__}: {e}")
             self._set_state(STATE_UNREGISTERED)
+            
+    def _on_connection_lost(self, exc: Optional[Exception]) -> None:
+        """Handle connection lost callback."""
+        self._connection_lost_count += 1
+        self._last_connection_lost = datetime.now()
+        
+        exc_info = f" (exception: {exc})" if exc else ""
+        _LOGGER.warning(
+            f"Connection lost (count: {self._connection_lost_count}){exc_info}. "
+            f"Local addr: {self.config.local_ip}:{self.config.local_port}, "
+            f"Server: {self.config.server}:{self.config.port}"
+        )
             
     async def _register_loop(self) -> None:
         """Registration loop with re-registration."""
         retry_delay = 30
         
+        _LOGGER.info(
+            f"Starting registration loop: user={self.config.user}, "
+            f"server={self.config.server}:{self.config.port}"
+        )
+        
         while True:
             try:
+                self._register_attempt_count += 1
+                self._last_register_attempt = datetime.now()
+                
+                _LOGGER.debug(
+                    f"Registration attempt #{self._register_attempt_count} "
+                    f"to {self.config.server}:{self.config.port}"
+                )
+                
                 if await self._do_register():
+                    # Сброс счетчика при успешной регистрации
+                    retry_delay = 30
+                    self._register_attempt_count = 0
+                    _LOGGER.debug("Registration successful, next re-registration in 300s")
                     await asyncio.sleep(300)
                 else:
+                    _LOGGER.warning(
+                        f"Registration failed (attempt #{self._register_attempt_count}), "
+                        f"retrying in {retry_delay}s"
+                    )
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, 300)
             except asyncio.CancelledError:
+                _LOGGER.debug("Registration loop cancelled")
                 break
             except Exception as e:
-                _LOGGER.error(f"Registration error: {e}")
+                _LOGGER.error(f"Registration error: {type(e).__name__}: {e}")
                 await asyncio.sleep(retry_delay)
                 
     async def _do_register(self) -> bool:
         """Perform single registration."""
         self._cseq += 1
         
+        _LOGGER.debug(
+            f"Sending REGISTER to {self.config.server}:{self.config.port}, "
+            f"Call-ID: {self._call_id}, CSeq: {self._cseq}"
+        )
+        
+        if not self._transport or not self._protocol:
+            _LOGGER.error("Transport or protocol not available for registration")
+            return False
+        
         msg = self._build_register(self._call_id, self._cseq)
-        self._transport.sendto(msg, (self.config.server, self.config.port))
+        
+        try:
+            self._transport.sendto(msg, (self.config.server, self.config.port))
+            _LOGGER.debug(f"REGISTER sent ({len(msg)} bytes)")
+        except Exception as e:
+            _LOGGER.error(f"Failed to send REGISTER: {type(e).__name__}: {e}")
+            return False
         
         try:
             response = await asyncio.wait_for(
                 self._protocol.wait_for_response(self._call_id, self._cseq),
                 timeout=5.0
             )
+            _LOGGER.debug(f"Received REGISTER response: {response.get('status_code')} {response.get('reason', '')}")
         except asyncio.TimeoutError:
-            _LOGGER.warning("Registration timeout")
+            _LOGGER.warning(
+                f"Registration timeout (5s) - no response from server. "
+                f"Server: {self.config.server}:{self.config.port}, "
+                f"Call-ID: {self._call_id}, CSeq: {self._cseq}"
+            )
+            return False
+        except Exception as e:
+            _LOGGER.error(f"Error waiting for REGISTER response: {type(e).__name__}: {e}")
             return False
             
         if response.get("status_code") == 200:
@@ -327,6 +398,8 @@ class SIPPhone:
             
         elif response.get("status_code") == 401:
             www_auth = response["headers"].get("www-authenticate", "")
+            _LOGGER.debug(f"Received 401, auth header: {www_auth[:100]}...")
+            
             match = re.search(r'nonce="([^"]+)"', www_auth)
             if not match:
                 _LOGGER.error("No nonce in 401 response")
@@ -336,18 +409,33 @@ class SIPPhone:
             realm_match = re.search(r'realm="([^"]+)"', www_auth)
             realm = realm_match.group(1) if realm_match else self.config.realm
             
+            _LOGGER.debug(f"Authenticating with realm={realm}, nonce={nonce[:20]}...")
+            
             self._cseq += 1
             auth = {"nonce": nonce, "realm": realm}
             msg = self._build_register(self._call_id, self._cseq, auth)
-            self._transport.sendto(msg, (self.config.server, self.config.port))
+            
+            try:
+                self._transport.sendto(msg, (self.config.server, self.config.port))
+                _LOGGER.debug(f"Auth REGISTER sent ({len(msg)} bytes)")
+            except Exception as e:
+                _LOGGER.error(f"Failed to send auth REGISTER: {type(e).__name__}: {e}")
+                return False
             
             try:
                 response = await asyncio.wait_for(
                     self._protocol.wait_for_response(self._call_id, self._cseq),
                     timeout=5.0
                 )
+                _LOGGER.debug(f"Received auth response: {response.get('status_code')}")
             except asyncio.TimeoutError:
-                _LOGGER.warning("Auth registration timeout")
+                _LOGGER.warning(
+                    f"Auth registration timeout (5s) - no response after sending credentials. "
+                    f"Server: {self.config.server}:{self.config.port}"
+                )
+                return False
+            except Exception as e:
+                _LOGGER.error(f"Error waiting for auth response: {type(e).__name__}: {e}")
                 return False
                 
             if response.get("status_code") == 200:
@@ -355,25 +443,29 @@ class SIPPhone:
                 self._set_state(STATE_REGISTERED)
                 return True
             else:
-                _LOGGER.error(f"Auth failed: {response.get('status_code')}")
+                _LOGGER.error(f"Auth failed: HTTP {response.get('status_code')}")
                 return False
         else:
-            _LOGGER.error(f"Registration failed: {response.get('status_code')}")
+            _LOGGER.error(f"Registration failed: HTTP {response.get('status_code')} {response.get('reason', '')}")
             return False
             
     def _on_message(self, data: bytes, addr: tuple) -> None:
         """Handle incoming SIP message (called from thread)."""
+        _LOGGER.debug(f"Received message from {addr} ({len(data)} bytes)")
         msg = self._parse_message(data)
         
         if "method" in msg:
+            _LOGGER.debug(f"Received {msg['method']} request")
             if msg["method"] == "INVITE":
                 self.hass.add_job(self._handle_invite, msg, addr)
             elif msg["method"] == "BYE":
                 self.hass.add_job(self._handle_bye, msg)
             elif msg["method"] == "ACK":
-                pass
+                _LOGGER.debug("Received ACK")
             elif msg["method"] == "CANCEL":
                 self.hass.add_job(self._handle_cancel, msg)
+            else:
+                _LOGGER.debug(f"Unhandled method: {msg['method']}")
         else:
             self._protocol.handle_response(msg)
             
@@ -622,12 +714,15 @@ class SIPPhone:
 class SIPProtocol(asyncio.DatagramProtocol):
     """UDP protocol handler."""
     
-    def __init__(self, on_message: Callable):
+    def __init__(self, on_message: Callable, on_connection_lost: Callable = None):
         self.on_message = on_message
+        self.on_connection_lost = on_connection_lost
         self._responses: dict[tuple, asyncio.Future] = {}
+        self._transport = None
         
     def connection_made(self, transport):
-        self.transport = transport
+        self._transport = transport
+        _LOGGER.debug(f"Protocol connection made")
         
     def datagram_received(self, data, addr):
         """Handle incoming datagram."""
@@ -667,10 +762,13 @@ class SIPProtocol(asyncio.DatagramProtocol):
         return result
         
     def error_received(self, exc):
-        _LOGGER.error(f"Protocol error: {exc}")
+        _LOGGER.error(f"Protocol error: {type(exc).__name__}: {exc}")
         
     def connection_lost(self, exc):
-        _LOGGER.warning("Connection lost")
+        if self.on_connection_lost:
+            self.on_connection_lost(exc)
+        else:
+            _LOGGER.warning(f"Connection lost: {exc}")
         
     async def wait_for_response(self, call_id: str, cseq: int, timeout: float = 5.0):
         """Wait for specific response."""
