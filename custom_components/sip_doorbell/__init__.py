@@ -32,7 +32,10 @@ from .phone import SIPPhone
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.MEDIA_PLAYER]
+
+# WebRTC peer connections storage
+WEBRTC_PEERS = {}
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -128,7 +131,7 @@ def _setup_services(hass: HomeAssistant, phone: SIPPhone) -> None:
 
 
 def _setup_websocket(hass: HomeAssistant) -> None:
-    """Setup WebSocket API for call events."""
+    """Setup WebSocket API for call events and WebRTC signaling."""
     
     @websocket_api.websocket_command({
         vol.Required("type"): f"{DOMAIN}/subscribe_calls",
@@ -189,9 +192,103 @@ def _setup_websocket(hass: HomeAssistant) -> None:
         else:
             connection.send_error(msg["id"], "not_found", "Phone not found")
     
+    # === WebRTC WebSocket Commands ===
+    
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"{DOMAIN}/webrtc_offer",
+        vol.Required("extension"): str,
+        vol.Required("sdp"): str,
+        vol.Required("call_id"): str,
+    })
+    @websocket_api.async_response
+    async def websocket_webrtc_offer(hass, connection, msg):
+        """Handle WebRTC offer from client."""
+        extension = msg["extension"]
+        sdp = msg["sdp"]
+        call_id = msg["call_id"]
+        
+        # Store peer connection info
+        if extension not in WEBRTC_PEERS:
+            WEBRTC_PEERS[extension] = {}
+        
+        WEBRTC_PEERS[extension][call_id] = {
+            "connection": connection,
+            "client_sdp": sdp,
+        }
+        
+        # Find phone and set up media stream
+        phone = None
+        for key, obj in hass.data.get(DOMAIN, {}).items():
+            if hasattr(obj, 'config') and obj.config.user == extension:
+                phone = obj
+                break
+        
+        if phone and hasattr(phone, 'handle_webrtc_offer'):
+            answer_sdp = await phone.handle_webrtc_offer(sdp, call_id)
+            connection.send_result(msg["id"], {
+                "sdp": answer_sdp,
+                "call_id": call_id,
+            })
+        else:
+            connection.send_error(msg["id"], "webrtc_error", "WebRTC not supported or phone not found")
+    
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"{DOMAIN}/webrtc_ice_candidate",
+        vol.Required("extension"): str,
+        vol.Required("call_id"): str,
+        vol.Required("candidate"): dict,
+    })
+    @websocket_api.async_response
+    async def websocket_webrtc_ice(hass, connection, msg):
+        """Handle ICE candidate from client."""
+        extension = msg["extension"]
+        call_id = msg["call_id"]
+        candidate = msg["candidate"]
+        
+        phone = None
+        for key, obj in hass.data.get(DOMAIN, {}).items():
+            if hasattr(obj, 'config') and obj.config.user == extension:
+                phone = obj
+                break
+        
+        if phone and hasattr(phone, 'add_ice_candidate'):
+            await phone.add_ice_candidate(call_id, candidate)
+            connection.send_result(msg["id"], {"success": True})
+        else:
+            connection.send_error(msg["id"], "webrtc_error", "WebRTC not supported")
+    
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"{DOMAIN}/webrtc_close",
+        vol.Required("extension"): str,
+        vol.Required("call_id"): str,
+    })
+    @websocket_api.async_response
+    async def websocket_webrtc_close(hass, connection, msg):
+        """Close WebRTC connection."""
+        extension = msg["extension"]
+        call_id = msg["call_id"]
+        
+        # Clean up peer connection
+        if extension in WEBRTC_PEERS and call_id in WEBRTC_PEERS[extension]:
+            del WEBRTC_PEERS[extension][call_id]
+        
+        phone = None
+        for key, obj in hass.data.get(DOMAIN, {}).items():
+            if hasattr(obj, 'config') and obj.config.user == extension:
+                phone = obj
+                break
+        
+        if phone and hasattr(phone, 'close_webrtc'):
+            await phone.close_webrtc(call_id)
+        
+        connection.send_result(msg["id"], {"success": True})
+    
     # Register WebSocket commands
     websocket_api.async_register_command(hass, websocket_subscribe_calls)
     websocket_api.async_register_command(hass, websocket_get_status)
+    websocket_api.async_register_command(hass, websocket_webrtc_offer)
+    websocket_api.async_register_command(hass, websocket_webrtc_ice)
+    websocket_api.async_register_command(hass, websocket_webrtc_close)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

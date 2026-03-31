@@ -63,6 +63,7 @@ sip_doorbell:
 |--------|------|-------------|
 | `sensor.sip_101_status` | Sensor | Registration status |
 | `switch.sip_101_call` | Switch | Call control (answer/hangup) |
+| `media_player.sip_101_media` | Media Player | Audio playback & volume control |
 
 ### Status States
 
@@ -114,6 +115,38 @@ data:
 
 ---
 
+
+## 🎙️ Media Player (v1.2.0+)
+
+SIP Doorbell создаёт сущность `media_player` для каждого аккаунта:
+
+### Возможности
+- Воспроизведение мелодий звонка
+- Управление громкостью (0-100%)
+- Автоматическая индикация входящих звонков
+- Интеграция с автоматизациями
+
+### Service Examples
+
+```yaml
+# Воспроизведение мелодии
+service: media_player.play_media
+target:
+  entity_id: media_player.sip_101_media
+data:
+  media_content_id: "/local/sounds/doorbell.mp3"
+  media_content_type: "audio/mp3"
+
+# Управление громкостью
+service: media_player.volume_set
+target:
+  entity_id: media_player.sip_101_media
+data:
+  volume_level: 0.7
+```
+
+---
+
 ## 🎨 Frontend: Call Popup Card
 
 Automatically shows a popup when an incoming call is detected.
@@ -125,7 +158,12 @@ Automatically shows a popup when an incoming call is detected.
    - URL: `/hacsfiles/sip_doorbell/call_popup.js`
    - Type: **Module**
 
-2. Add card to your dashboard:
+2. **Add WebRTC Support** (v1.2.0+):
+   - **Settings** → **Dashboards** → **⋮** → **Resources** → **Add Resource**
+   - URL: `/hacsfiles/sip_doorbell/webrtc-client.js`
+   - Type: **Module**
+
+3. Add card to your dashboard:
 
 ```yaml
 type: custom:sip-doorbell-call-popup
@@ -133,6 +171,7 @@ title: 🔔 Doorbell
 auto_open: true
 auto_close: true
 timeout: 30
+webrtc_enabled: true  # Включить WebRTC аудио (v1.2.0+)
 ```
 
 ### Features
@@ -142,6 +181,46 @@ timeout: 30
 - ✅ Answer/Hangup buttons
 - ✅ DTMF keypad for door opening
 - ✅ Auto-close after timeout
+- ✅ **WebRTC двустороннее аудио** (v1.2.0+)
+- ✅ **Кастомизация интерфейса** (v1.2.0+)
+
+### 🎨 Кастомизация Popup (v1.2.0+)
+
+Всплывающее окно можно настроить через Home Assistant themes:
+
+```yaml
+# configuration.yaml
+frontend:
+  themes:
+    my_sip_theme:
+      # Цвета
+      sip-popup-primary-color: "#4CAF50"
+      sip-popup-decline-color: "#F44336"
+      
+      # Размеры
+      sip-popup-width: "450px"
+      sip-popup-border-radius: "16px"
+      
+      # Анимация
+      sip-popup-animation: "slideInRight"
+      # Варианты: slideInRight, slideInLeft, fadeIn, bounceIn
+```
+
+### Advanced CSS Customization
+
+```yaml
+type: custom:mod-card
+style: |
+  sip-call-popup {
+    --popup-bg-color: var(--card-background-color);
+    --popup-border-radius: 20px;
+    --popup-box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    --popup-title-size: 1.8em;
+  }
+card:
+  type: custom:sip-doorbell-call-popup
+  webrtc_enabled: true
+```
 
 ---
 
@@ -218,6 +297,7 @@ action:
 
 ---
 
+
 ## 🌐 WebSocket API
 
 For custom frontend integrations.
@@ -243,6 +323,34 @@ const status = await hass.callWS({
   extension: '101'
 });
 // Returns: { state, extension, server, local_ip, local_port }
+```
+
+### WebRTC Signaling (v1.2.0+)
+
+```javascript
+// Start WebRTC call
+const result = await hass.callWS({
+  type: 'sip_doorbell/webrtc_offer',
+  extension: '101',
+  sdp: offer.sdp,
+  call_id: 'unique-call-id'
+});
+// Returns: { sdp: answer_sdp }
+
+// Send ICE candidate
+await hass.callWS({
+  type: 'sip_doorbell/webrtc_ice_candidate',
+  extension: '101',
+  call_id: 'unique-call-id',
+  candidate: iceCandidate
+});
+
+// Close WebRTC
+await hass.callWS({
+  type: 'sip_doorbell/webrtc_close',
+  extension: '101',
+  call_id: 'unique-call-id'
+});
 ```
 
 ---
@@ -290,7 +398,16 @@ logger:
 
 ---
 
+
 ## 📝 Changelog
+
+### v1.2.0 (2026-03-31)
+**Major Feature: WebRTC Audio & Customization**
+- ✅ **WebRTC** - Нативное двустороннее аудио
+- ✅ **Media Player** - Платформа для воспроизведения мелодий
+- ✅ **Кастомизация Popup** - CSS переменные и темы
+- ✅ **WebSocket API** - Команды для WebRTC сигналинга
+- ✅ **JavaScript API** - Класс SIPWebRTCClient для разработчиков
 
 ### v1.1.0 (2026-03-30)
 **Feature: Call Popup**
