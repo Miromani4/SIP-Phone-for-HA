@@ -772,4 +772,14 @@ class SIPDoorbellCallPopup extends HTMLElement {
 
 customElements.define('sip-doorbell-call-popup', SIPDoorbellCallPopup);
 
+// Register as custom card for Home Assistant
+window.customCards = window.customCards || [];
+window.customCards.push({
+    type: 'sip-doorbell-call-popup',
+    name: 'SIP Doorbell Call Popup',
+    description: 'Auto-popup card for incoming SIP calls with WebRTC support',
+    preview: true,
+    documentationURL: 'https://github.com/Miromani4/SIP-Phone-for-HA'
+});
+
 console.info('%c SIP Doorbell Call Popup %c WebRTC Enabled ', 'background: #03a9f4; color: white; border-radius: 3px; padding: 2px;', 'background: #4caf50; color: white; border-radius: 3px; padding: 2px;');
