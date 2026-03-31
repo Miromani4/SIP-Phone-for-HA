@@ -453,8 +453,11 @@ class SIPPhone:
         self._dispatch_signal(SIGNAL_CALL_ENDED, {})
         
         # Send 200 OK
-        ok = self._build_ok(msg)
-        self._transport.sendto(ok, self._dialog["remote_addr"] if self._dialog else None)
+        if self._dialog and self._dialog.get("remote_addr"):
+            ok = self._build_ok(msg)
+            self._transport.sendto(ok, self._dialog["remote_addr"])
+        else:
+            _LOGGER.warning("Cannot send 200 OK: no dialog or remote address")
         
         # Clear dialog
         self._pending_invite = None
@@ -478,8 +481,11 @@ class SIPPhone:
         
         self._dispatch_signal(SIGNAL_CALL_ENDED, {})
         
-        ok = self._build_ok(msg)
-        self._transport.sendto(ok)
+        if self._dialog and self._dialog.get("remote_addr"):
+            ok = self._build_ok(msg)
+            self._transport.sendto(ok, self._dialog["remote_addr"])
+        else:
+            _LOGGER.debug("No dialog for CANCEL response, skipping 200 OK")
         
         # Clear state
         self._pending_invite = None
@@ -544,11 +550,14 @@ class SIPPhone:
         if self._state in [STATE_IN_CALL, STATE_RINGING] and self._dialog:
             bye = self._build_bye(self._dialog)
             self._transport.sendto(bye, self._dialog["remote_addr"])
-        elif self._state == STATE_RINGING and self._pending_invite:
+        elif self._state == STATE_RINGING and self._pending_invite and self._dialog:
             # Send 487 Request Terminated for ringing call
             _LOGGER.info("Rejecting ringing call")
-            reject = self._build_reject(self._pending_invite)
-            self._transport.sendto(reject, self._dialog["remote_addr"] if self._dialog else None)
+            if self._dialog.get("remote_addr"):
+                reject = self._build_reject(self._pending_invite)
+                self._transport.sendto(reject, self._dialog["remote_addr"])
+            else:
+                _LOGGER.warning("Cannot reject call: no remote address in dialog")
         
         # Clear state
         self._pending_invite = None
